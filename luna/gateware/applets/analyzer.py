@@ -12,7 +12,9 @@ import time
 import errno
 
 
-import usb
+import usb1
+from threading import Thread
+from queue import SimpleQueue
 from datetime import datetime
 
 from amaranth                         import Signal, Elaboratable, Module
@@ -37,6 +39,10 @@ USB_PRODUCT_ID       = 0x615b
 BULK_ENDPOINT_NUMBER  = 1
 BULK_ENDPOINT_ADDRESS = 0x80 | BULK_ENDPOINT_NUMBER
 MAX_BULK_PACKET_SIZE  = 512
+
+BULK_TRANSFER_SIZE  = 256*1024
+BULK_TRANSFER_COUNT = 4
+
 
 class USBAnalyzerApplet(Elaboratable):
     """ Gateware that serves as a generic USB analyzer backend.
@@ -168,8 +174,12 @@ class USBAnalyzerConnection:
         """ Creates our connection to the USBAnalyzer. """
 
         self._buffer = bytearray()
+        self._context = usb1.USBContext()
         self._device = None
-
+        self._transfers = []
+        self._queue = SimpleQueue()
+        self._transfer_thread = None
+        self._started = False
 
 
     def build_and_configure(self, capture_speed):
@@ -185,29 +195,50 @@ class USBAnalyzerConnection:
 
         time.sleep(3)
 
-        # For now, we'll use a slow, synchronous connection to the device via pyusb.
-        # This should be replaced with libusb1 for performance.
         end_time = time.time() + 6
         while not self._device:
             if time.time() > end_time:
                 raise RuntimeError('Timeout! The analyzer device did not show up.')
+            self._device = self._context.openByVendorIDAndProductID(
+                    USB_VENDOR_ID, USB_PRODUCT_ID)
 
-            self._device = usb.core.find(idVendor=USB_VENDOR_ID, idProduct=USB_PRODUCT_ID)
+        self._device.claimInterface(0)
+
+        for i in range(BULK_TRANSFER_COUNT):
+            transfer = self._device.getTransfer()
+            transfer.setBulk(BULK_ENDPOINT_ADDRESS, BULK_TRANSFER_SIZE,
+                    callback=self._transfer_completed, timeout=100)
+            self._transfers.append(transfer)
+
+
+    def _run_capture(self):
+        for transfer in self._transfers:
+            transfer.submit()
+
+        while True:
+            self._context.handleEvents()
+
+
+    def _start_capture(self):
+        self._transfer_thread = Thread(target=self._run_capture)
+        self._transfer_thread.start()
+        self._started = True
+
+
+    def _transfer_completed(self, transfer):
+        status = transfer.getStatus()
+        if status in (usb1.TRANSFER_COMPLETED, usb1.TRANSFER_TIMED_OUT):
+            length = transfer.getActualLength()
+            data = transfer.getBuffer()[:length]
+            self._queue.put(data)
+            transfer.submit()
 
 
     def _fetch_data_into_buffer(self):
         """ Attempts a single data read from the analyzer into our buffer. """
 
-        try:
-            data = self._device.read(BULK_ENDPOINT_ADDRESS, MAX_BULK_PACKET_SIZE)
-            self._buffer.extend(data)
-        except usb.core.USBError as e:
-            if e.errno == errno.ETIMEDOUT:
-                pass
-            else:
-                raise
-
-
+        data = self._queue.get()
+        self._buffer.extend(data)
 
     def read_raw_packet(self):
         """ Reads a raw packet from our USB Analyzer. Blocks until a packet is complete.
@@ -220,6 +251,9 @@ class USBAnalyzerConnection:
 
         size = 0
         packet = None
+
+        if not self._started:
+            self._start_capture()
 
         # Read until we get enough data to determine our packet's size...
         while not packet:

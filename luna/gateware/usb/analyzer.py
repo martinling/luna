@@ -153,7 +153,7 @@ class USBAnalyzer(Elaboratable):
         with m.FSM(domain="usb") as f:
             m.d.comb += [
                 self.stopped   .eq(f.ongoing("AWAIT_START")),
-                self.overrun   .eq(f.ongoing("OVERRUN")),
+                self.overrun   .eq(f.ongoing("OVERRUN_1") | f.ongoing("OVERRUN_2")),
                 self.capturing .eq(f.ongoing("CAPTURE_PACKET")),
                 self.discarding.eq(f.ongoing("AWAIT_START") & self.capture_enable),
             ]
@@ -184,22 +184,30 @@ class USBAnalyzer(Elaboratable):
 
                 # Capture data whenever RxValid is asserted.
                 m.d.comb += [
-                    mem_write_port.addr  .eq(write_location),
-                    mem_write_port.data  .eq(self.utmi.rx_data),
                     mem_write_port.en    .eq(byte_received),
                 ]
 
                 # Advance the write pointer each time we receive a bit.
                 with m.If(byte_received):
-                    m.d.usb += [
-                        write_location  .eq(write_location + 1),
-                        packet_size     .eq(packet_size + 1)
-                    ]
 
-                    # If this would be filling up our data memory,
-                    # move to the OVERRUN state.
+                    # If this would be filling up our data memory, record an overrun.
                     with m.If(fifo_count == self.mem_size - packet_size - self.HEADER_SIZE_BYTES):
-                        m.next = "OVERRUN"
+                        # Write the first of two 0xFF bytes in place of packet length.
+                        m.d.comb += [
+                            mem_write_port.addr.eq(header_location),
+                            mem_write_port.data.eq(0xFF),
+                        ]
+                        # The second 0xFF byte will be written during the OVERRUN_1 state.
+                        m.next = "OVERRUN_1"
+                    with m.Else():
+                        m.d.comb += [
+                            mem_write_port.addr.eq(write_location),
+                            mem_write_port.data.eq(self.utmi.rx_data)
+                        ]
+                        m.d.usb += [
+                            write_location.eq(write_location + 1),
+                            packet_size.eq(packet_size + 1)
+                        ]
 
                 # If we've stopped receiving, move to the "finalize" state.
                 with m.If(~self.utmi.rx_active):
@@ -251,8 +259,18 @@ class USBAnalyzer(Elaboratable):
                 pass
 
 
-            with m.State("OVERRUN"):
-                # TODO: we should probably set an overrun flag and then emit an EOP, here?
+            with m.State("OVERRUN_1"):
+                # Write second 0xFF byte to buffer in place of packet length.
+                m.d.comb += [
+                    mem_write_port.addr  .eq(header_location + 1),
+                    mem_write_port.data  .eq(0xFF),
+                    mem_write_port.en    .eq(1),
+                    data_pushed          .eq(self.HEADER_SIZE_BYTES)
+                ]
+                m.d.usb += write_location.eq(header_location + 2)
+                m.next = "OVERRUN_2"
+
+            with m.State("OVERRUN_2"):
 
                 # If capture is stopped by the host, reset back to the ready state.
                 with m.If(~self.capture_enable):

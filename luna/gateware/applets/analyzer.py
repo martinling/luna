@@ -170,7 +170,7 @@ class USBAnalyzerApplet(Elaboratable):
             d.iManufacturer      = "LUNA"
             d.iProduct           = "USB Analyzer"
             d.iSerialNumber      = "[autodetect serial here]"
-            d.bcdDevice          = 0.02
+            d.bcdDevice          = 0.03
 
             d.bNumConfigurations = 1
 

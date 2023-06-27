@@ -159,7 +159,7 @@ class USBAnalyzer(Elaboratable):
                 self.stopped   .eq(f.ongoing("AWAIT_START") | f.ongoing("OVERRUN")),
                 self.overrun   .eq(f.ongoing("OVERRUN")),
                 self.capturing .eq(f.ongoing("CAPTURE_PACKET")),
-                self.discarding.eq(self.stopped & self.capture_enable),
+                self.discarding.eq(f.ongoing("AWAIT_START") & self.capture_enable),
             ]
 
             # AWAIT_START: wait for capture to be enabled, but don't start mid-packet.

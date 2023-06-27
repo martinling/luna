@@ -102,7 +102,6 @@ class USBAnalyzer(Elaboratable):
         # Read FIFO status.
         read_location   = Signal.like(mem_read_port.addr)
         fifo_count      = Signal.like(mem_read_port.addr, reset=0)
-        fifo_new_data   = Signal()
 
         # Current receive status.
         packet_size     = Signal(16)
@@ -113,7 +112,7 @@ class USBAnalyzer(Elaboratable):
         m.d.comb += [
 
             # We have data ready whenever there's data in the FIFO.
-            self.stream.valid    .eq((fifo_count != 0) & (self.idle | self.overrun)),
+            self.stream.valid    .eq(fifo_count != 0),
 
             # Our data_out is always the output of our read port...
             self.stream.payload  .eq(mem_read_port.data),
@@ -135,14 +134,10 @@ class USBAnalyzer(Elaboratable):
         #
         # FIFO count handling.
         #
-        fifo_full = (fifo_count == self.mem_size)
 
-        data_pop   = Signal()
-        data_push  = Signal()
-        m.d.comb += [
-            data_pop   .eq(self.stream.ready & self.stream.valid),
-            data_push  .eq(fifo_new_data & ~fifo_full)
-        ]
+        data_popped = Signal()
+        data_pushed = Signal(16)
+        m.d.comb += data_popped.eq(self.stream.ready & self.stream.valid)
 
         # If discarding data, set the count to zero.
         with m.If(self.discarding):
@@ -151,18 +146,9 @@ class USBAnalyzer(Elaboratable):
                 read_location.eq(0),
                 write_location.eq(0),
             ]
-
-        # If we have both a read and a write, don't update the count,
-        # as we've both added one and subtracted one.
-        with m.Elif(data_push & data_pop):
-            pass
-
-        # Otherwise, add when data's added, and subtract when data's removed.
-        with m.Elif(data_push):
-            m.d.usb += fifo_count.eq(fifo_count + 1)
-        with m.Elif(data_pop):
-            m.d.usb += fifo_count.eq(fifo_count - 1)
-
+        with m.Else():
+            # Otherwise, maintain FIFO count according to bytes pushed and popped.
+            m.d.usb += fifo_count.eq(fifo_count + data_pushed - data_popped)
 
         #
         # Core analysis FSM.
@@ -205,7 +191,6 @@ class USBAnalyzer(Elaboratable):
                     mem_write_port.addr  .eq(write_location),
                     mem_write_port.data  .eq(self.utmi.rx_data),
                     mem_write_port.en    .eq(byte_received),
-                    fifo_new_data        .eq(byte_received),
                 ]
 
                 # Advance the write pointer each time we receive a bit.
@@ -217,7 +202,7 @@ class USBAnalyzer(Elaboratable):
 
                     # If this would be filling up our data memory,
                     # move to the OVERRUN state.
-                    with m.If(fifo_count == self.mem_size - 1 - self.HEADER_SIZE_BYTES):
+                    with m.If(fifo_count == self.mem_size - packet_size - self.HEADER_SIZE_BYTES):
                         m.next = "OVERRUN"
 
                 # If we've stopped receiving, move to the "finalize" state.
@@ -244,7 +229,6 @@ class USBAnalyzer(Elaboratable):
                     mem_write_port.addr  .eq(header_location),
                     mem_write_port.data  .eq(packet_size[8:16]),
                     mem_write_port.en    .eq(1),
-                    fifo_new_data        .eq(1)
                 ]
                 m.next = "EOP_2"
 
@@ -258,7 +242,7 @@ class USBAnalyzer(Elaboratable):
                     mem_write_port.addr  .eq(header_location + 1),
                     mem_write_port.data  .eq(packet_size[0:8]),
                     mem_write_port.en    .eq(1),
-                    fifo_new_data        .eq(1)
+                    data_pushed          .eq(self.HEADER_SIZE_BYTES + packet_size)
                 ]
                 m.next = "AWAIT_PACKET"
 

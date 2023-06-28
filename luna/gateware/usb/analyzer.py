@@ -28,8 +28,6 @@ class USBAnalyzer(Elaboratable):
     stream: StreamInterface(), output stream
         Stream that carries USB analyzer data.
 
-    idle: Signal(), output
-        Asserted iff the analyzer is not currently receiving data.
     stopped: Signal(), output
         Asserted iff the analyzer is stopped and not capturing packets.
     overrun: Signal(), output
@@ -77,7 +75,6 @@ class USBAnalyzer(Elaboratable):
         self.stream         = StreamInterface()
 
         self.capture_enable = Signal()
-        self.idle           = Signal()
         self.stopped        = Signal()
         self.overrun        = Signal()
         self.capturing      = Signal()
@@ -155,8 +152,7 @@ class USBAnalyzer(Elaboratable):
         #
         with m.FSM(domain="usb") as f:
             m.d.comb += [
-                self.idle      .eq(f.ongoing("AWAIT_START") | f.ongoing("AWAIT_PACKET")),
-                self.stopped   .eq(f.ongoing("AWAIT_START") | f.ongoing("OVERRUN")),
+                self.stopped   .eq(f.ongoing("AWAIT_START")),
                 self.overrun   .eq(f.ongoing("OVERRUN")),
                 self.capturing .eq(f.ongoing("CAPTURE_PACKET")),
                 self.discarding.eq(f.ongoing("AWAIT_START") & self.capture_enable),

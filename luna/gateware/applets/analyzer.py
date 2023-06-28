@@ -256,8 +256,8 @@ class USBAnalyzerApplet(Elaboratable):
             # Connect enable signal to host-controlled state register.
             analyzer.capture_enable     .eq(state.current[0]),
 
-            # Flush endpoint when analyzer is idle with capture disabled.
-            stream_ep.flush             .eq(analyzer.idle & ~analyzer.capture_enable),
+            # Flush endpoint when analyzer is stopped or has overrun.
+            stream_ep.flush             .eq(analyzer.stopped | analyzer.overrun),
 
             # Discard data buffered by endpoint when the analyzer discards its data.
             stream_ep.discard           .eq(analyzer.discarding),

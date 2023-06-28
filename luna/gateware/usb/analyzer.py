@@ -276,6 +276,10 @@ class USBAnalyzer(Elaboratable):
                 with m.If(~self.capture_enable):
                     m.next = "AWAIT_START"
 
+                # Or if FIFO is fully read out, resume capture at next packet.
+                with m.Elif((fifo_count == 0) & ~self.utmi.rx_active):
+                    m.next = "AWAIT_PACKET"
+
 
         return m
 

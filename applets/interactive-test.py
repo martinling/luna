@@ -37,6 +37,9 @@ ALLOWED_HYPERRAM_IDS = (0x0c81, 0x0c86)
 REGISTER_ID             = 1
 REGISTER_LEDS           = 2
 
+REGISTER_CON_VBUS_EN    = 3
+REGISTER_AUX_VBUS_EN    = 4
+
 REGISTER_TARGET_ADDR    = 7
 REGISTER_TARGET_VALUE   = 8
 REGISTER_TARGET_RXCMD   = 9
@@ -101,6 +104,15 @@ class InteractiveSelftest(Elaboratable, ApolloSelfTestCase):
         led_reg = registers.add_register(REGISTER_LEDS, size=6, name="leds", reset=0b111111)
         led_out   = Cat([platform.request("led", i, dir="o").o for i in range(0, 6)])
         m.d.comb += led_out.eq(led_reg)
+
+        # VBUS enable registers.
+        con_vbus_reg = registers.add_register(REGISTER_CON_VBUS_EN, size=1, reset=True)
+        aux_vbus_reg = registers.add_register(REGISTER_AUX_VBUS_EN, size=1, reset=True)
+
+        m.d.comb += [
+            platform.request("control_vbus_in_en", 0, dir="o").eq(con_vbus_reg),
+            platform.request("aux_vbus_in_en", 0, dir="o").eq(aux_vbus_reg),
+        ]
 
         #
         # ULPI PHY windows

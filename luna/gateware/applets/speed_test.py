@@ -4,6 +4,8 @@ from usb_protocol.emitters   import DeviceDescriptorCollection, SuperSpeedDevice
 from luna.usb2               import USBDevice, USBStreamInEndpoint
 from luna.usb3               import USBSuperSpeedDevice, SuperSpeedStreamInEndpoint
 
+from luna.gateware.architecture.adv import ApolloAdvertiser
+
 VENDOR_ID  = 0x16d0
 PRODUCT_ID = 0x0f3b
 
@@ -69,7 +71,7 @@ class USBInSpeedTestDevice(Elaboratable):
         if self.phy is None:
             ulpi = platform.request(platform.default_usb_connection)
         else:
-            ulpi = self.phy
+            ulpi = platform.request(self.phy)
 
         # Create our USB device interface...
         m.submodules.usb = usb = USBDevice(bus=ulpi)
@@ -79,7 +81,12 @@ class USBInSpeedTestDevice(Elaboratable):
 
         # Add our standard control endpoint to the device.
         descriptors = self.create_descriptors()
-        usb.add_standard_control_endpoint(descriptors)
+        control_ep = usb.add_standard_control_endpoint(descriptors)
+
+        if self.phy == "control_phy":
+            # Announce the use of the CONTROL port to Apollo
+            m.submodules.advertiser = advertiser = ApolloAdvertiser()
+            control_ep.add_request_handler(advertiser.default_request_handler())
 
         # Add a stream endpoint to our device.
         stream_ep = USBStreamInEndpoint(

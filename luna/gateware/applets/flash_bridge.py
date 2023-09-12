@@ -248,6 +248,10 @@ class FlashBridgeSubmodule(Elaboratable):
 
 class FlashBridge(Elaboratable):
 
+    def __init__(self, phy=None):
+        super().__init__()
+        self.phy = phy
+
     def create_descriptors(self):
         """ Create the descriptors we want to use for our device. """
 
@@ -294,14 +298,18 @@ class FlashBridge(Elaboratable):
         m.submodules.car = platform.clock_domain_generator()
 
         # Create our USB device interface...
-        ulpi = platform.request(platform.default_usb_connection)
+        if self.phy is None:
+            phy = platform.default_usb_connection
+        else:
+            phy = self.phy
+        ulpi = platform.request(phy)
         m.submodules.usb = usb = USBDevice(bus=ulpi)
 
         # Add our standard control endpoint to the device.
         descriptors = self.create_descriptors()
         control_ep = usb.add_standard_control_endpoint(descriptors)
 
-        if platform.default_usb_connection == "control_phy":
+        if phy == "control_phy":
             # Announce the use of the CONTROL port to Apollo
             m.submodules.advertiser = advertiser = ApolloAdvertiser()
             control_ep.add_request_handler(advertiser.default_request_handler())

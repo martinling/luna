@@ -8,7 +8,8 @@
 
 import unittest
 
-from amaranth          import Signal, Module, Elaboratable, Memory, Record, Mux, Cat
+from amaranth          import Signal, Module, Elaboratable, Memory, Record, Mux, Cat, C
+from enum              import IntEnum
 
 from ..stream          import StreamInterface
 from ..test            import LunaGatewareTestCase, usb_domain_test_case
@@ -53,6 +54,9 @@ class USBAnalyzer(Elaboratable):
     # Header is 16-bit length and 16-bit timestamp.
     HEADER_SIZE_BITS = 32
     HEADER_SIZE_BYTES = HEADER_SIZE_BITS // 8
+
+    # An event is a 16-bit code starting 0xFF, and a 16-bit timestamp.
+    EVENT_SIZE_BYTES = 4
 
     # Support a maximum payload size of 1024B, plus a 1-byte PID and a 2-byte CRC16.
     MAX_PACKET_SIZE_BYTES = 1024 + 1 + 2
@@ -117,10 +121,12 @@ class USBAnalyzer(Elaboratable):
         # Current receive status.
         packet_size     = Signal(16)
         packet_time     = Signal(16)
+        event_code      = Signal(8)
 
         # Triggers for memory write operations.
         write_packet    = Signal()
         write_header    = Signal()
+        write_event     = Signal()
 
         #
         # Read FIFO logic.
@@ -133,7 +139,7 @@ class USBAnalyzer(Elaboratable):
             # Our data_out is always the output of our read port...
             self.stream.payload  .eq(mem_read_port.data.word_select(~read_odd, 8)),
 
-            self.sampling        .eq(write_packet | write_header)
+            self.sampling        .eq(write_packet | write_header | write_event)
         ]
 
         # Once our consumer has accepted our current data, move to the next address.
@@ -204,6 +210,16 @@ class USBAnalyzer(Elaboratable):
                         packet_time      .eq(current_time),
                         current_time     .eq(0),
                     ]
+                with m.Elif(current_time == 0xFFFF):
+                    # The timestamp is about to wrap. Write a dummy event.
+                    m.d.comb += [
+                        write_event      .eq(1),
+                        event_code       .eq(USBAnalyzerEvent.NONE),
+                        data_pushed      .eq(self.EVENT_SIZE_BYTES),
+                    ]
+                    m.d.usb += [
+                        write_location   .eq(event_location + self.EVENT_SIZE_BYTES),
+                    ]
 
 
             # Capture data until the packet is complete.
@@ -262,6 +278,14 @@ class USBAnalyzer(Elaboratable):
         with m.FSM(domain="sync"):
             # START: Begin write operation when requested.
             with m.State("START"):
+                with m.If(write_event):
+                    # Write event identifier and event code.
+                    m.d.comb += [
+                        mem_write_port.addr  .eq(event_location),
+                        mem_write_port.data  .eq(Cat([event_code, C(0xFF, 8)])),
+                        mem_write_port.en    .eq(0b11),
+                    ]
+                    m.next = "FINISH_EVENT"
                 with m.If(write_packet):
                     # Write packet byte.
                     m.d.comb += [
@@ -288,6 +312,15 @@ class USBAnalyzer(Elaboratable):
                 ]
                 m.next = "START"
 
+            # FINISH_EVENT: Write second word of event.
+            with m.State("FINISH_EVENT"):
+                m.d.comb += [
+                        mem_write_port.addr  .eq(event_location + 1),
+                        mem_write_port.data  .eq(current_time),
+                        mem_write_port.en    .eq(0b11)
+                ]
+                m.next = "START"
+
             # IDLE: Nothing to do this cycle.
             with m.State("IDLE"):
                 m.next = "START"
@@ -295,6 +328,9 @@ class USBAnalyzer(Elaboratable):
 
         return m
 
+
+class USBAnalyzerEvent(IntEnum):
+    NONE = 0
 
 
 class USBAnalyzerTest(LunaGatewareTestCase):

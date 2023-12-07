@@ -98,6 +98,7 @@ class USBAnalyzer(Elaboratable):
         # packet metadata like the packet size.
         header_location = Signal.like(mem_write_port.addr)
         write_location  = Signal(range(self.mem_size))
+        event_location  = Signal.like(header_location)
 
         # Read FIFO status.
         read_location   = Signal(range(self.mem_size))
@@ -197,7 +198,7 @@ class USBAnalyzer(Elaboratable):
                 with m.Elif(self.utmi.rx_active):
                     m.next = "CAPTURE_PACKET"
                     m.d.usb += [
-                        header_location  .eq((write_location + write_odd)[1:]),
+                        header_location  .eq(event_location),
                         write_location   .eq(write_location + write_odd + self.HEADER_SIZE_BYTES),
                         packet_size      .eq(0),
                         packet_time      .eq(current_time),
@@ -218,8 +219,10 @@ class USBAnalyzer(Elaboratable):
 
                 # Advance the write pointer each time we receive a bit.
                 with m.If(byte_received):
+                    next_location = write_location + 1
                     m.d.usb += [
-                        write_location  .eq(write_location + 1),
+                        write_location  .eq(next_location),
+                        event_location  .eq((next_location + next_location[0])[1:]),
                         packet_size     .eq(packet_size + 1)
                     ]
 
